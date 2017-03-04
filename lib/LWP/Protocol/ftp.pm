@@ -3,6 +3,7 @@ package LWP::Protocol::ftp;
 # Implementation of the ftp protocol (RFC 959). We let the Net::FTP
 # package do all the dirty work.
 
+use strict;
 use Carp ();
 
 use HTTP::Status    ();
@@ -13,12 +14,8 @@ use File::Listing   ();
 
 use base qw(LWP::Protocol);
 
-use strict;
-eval {
+{
     package LWP::Protocol::MyFTP;
-
-    require Net::FTP;
-    Net::FTP->require_version(2.00);
 
     use base qw(Net::FTP);
 
@@ -68,10 +65,7 @@ eval {
         my $self = shift;
         return $self->go_home;
     }
-
-};
-my $init_failed = $@;
-
+}
 
 sub _connect {
     my ($self, $host, $port, $user, $account, $password, $timeout) = @_;
@@ -149,11 +143,6 @@ sub request {
     unless ($method eq 'GET' || $method eq 'HEAD' || $method eq 'PUT') {
         return HTTP::Response->new(HTTP::Status::RC_BAD_REQUEST,
             'Library does not allow method ' . "$method for 'ftp:' URLs");
-    }
-
-    if ($init_failed) {
-        return HTTP::Response->new(HTTP::Status::RC_INTERNAL_SERVER_ERROR,
-            $init_failed);
     }
 
     my $host     = $url->host;
