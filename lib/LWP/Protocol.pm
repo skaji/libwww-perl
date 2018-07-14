@@ -100,13 +100,18 @@ sub collect
     my $content;
     my($ua, $max_size) = @{$self}{qw(ua max_size)};
 
-    try {
+    my $error;
+    {
         local $\; # protect the print below from surprises
         if (!defined($arg) || !$response->is_success) {
             $response->{default_add_content} = 1;
         }
         elsif (!ref($arg) && length($arg)) {
-            open(my $fh, ">", $arg) or die "Can't write to '$arg': $!";
+            my $fh;
+            if (!open($fh, ">", $arg)) {
+                $error = "Can't write to '$arg': $!";
+                last;
+            }
 	    binmode($fh);
             push(@{$response->{handlers}{response_data}}, {
                 callback => sub {
@@ -132,45 +137,51 @@ sub collect
         else {
             die "Unexpected collect argument '$arg'";
         }
+    }
 
-        $ua->run_handlers("response_header", $response);
+    if (!$error) {
+        try {
+            $ua->run_handlers("response_header", $response);
 
-        if (delete $response->{default_add_content}) {
-            push(@{$response->{handlers}{response_data}}, {
-		callback => sub {
-		    $_[0]->add_content($_[3]);
-		    1;
-		},
-	    });
-        }
+            if (delete $response->{default_add_content}) {
+                push(@{$response->{handlers}{response_data}}, {
+                    callback => sub {
+                        $_[0]->add_content($_[3]);
+                        1;
+                    },
+                });
+            }
 
 
-        my $content_size = 0;
-        my $length = $response->content_length;
-        my %skip_h;
+            my $content_size = 0;
+            my $length = $response->content_length;
+            my %skip_h;
 
-        while ($content = &$collector, length $$content) {
-            for my $h ($ua->handlers("response_data", $response)) {
-                next if $skip_h{$h};
-                unless ($h->{callback}->($response, $ua, $h, $$content)) {
-                    # XXX remove from $response->{handlers}{response_data} if present
-                    $skip_h{$h}++;
+            while ($content = &$collector, length $$content) {
+                for my $h ($ua->handlers("response_data", $response)) {
+                    next if $skip_h{$h};
+                    unless ($h->{callback}->($response, $ua, $h, $$content)) {
+                        # XXX remove from $response->{handlers}{response_data} if present
+                        $skip_h{$h}++;
+                    }
+                }
+                $content_size += length($$content);
+                $ua->progress(($length ? ($content_size / $length) : "tick"), $response);
+                if (defined($max_size) && $content_size > $max_size) {
+                    $response->push_header("Client-Aborted", "max_size");
+                    last;
                 }
             }
-            $content_size += length($$content);
-            $ua->progress(($length ? ($content_size / $length) : "tick"), $response);
-            if (defined($max_size) && $content_size > $max_size) {
-                $response->push_header("Client-Aborted", "max_size");
-                last;
-            }
         }
+        catch {
+            $error = $_;
+        };
     }
-    catch {
-        my $error = $_;
+    if ($error) {
         chomp($error);
         $response->push_header('X-Died' => $error);
         $response->push_header("Client-Aborted", "die");
-    };
+    }
     delete $response->{handlers}{response_data};
     delete $response->{handlers} unless %{$response->{handlers}};
     return $response;
